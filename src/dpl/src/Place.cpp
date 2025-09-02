@@ -731,56 +731,33 @@ PixelPt Opendp::searchNearestSite(const Node* cell,
              y_min,
              y_max - 1);
 
-  struct PQ_entry
-  {
-    int manhattan_distance;
-    GridPt p;
-    bool operator>(const PQ_entry& other) const
-    {
-      return manhattan_distance > other.manhattan_distance;
+  auto check_pt = [&](GridX pt_x, GridY pt_y) -> bool {
+    if (pt_x >= x_min && pt_x <= x_max && pt_y >= y_min && pt_y <= y_max) {
+      if (canBePlaced(cell, pt_x, pt_y)) {
+        return true;
+      }
     }
-    bool operator==(const PQ_entry& other) const
-    {
-      return manhattan_distance == other.manhattan_distance;
-    }
+    return false;
   };
-  std::priority_queue<PQ_entry, std::vector<PQ_entry>, std::greater<PQ_entry>>
-      positionsHeap;
-  std::unordered_set<GridPt> visited;
-  GridPt center{x, y};
-  positionsHeap.push(PQ_entry{0, center});
-  visited.insert(center);
 
-  const vector<GridPt> neighbors = {{GridX(-1), GridY(0)},
-                                    {GridX(1), GridY(0)},
-                                    {GridX(0), GridY(-1)},
-                                    {GridX(0), GridY(1)}};
-  while (!positionsHeap.empty()) {
-    const GridPt nearest = positionsHeap.top().p;
-    positionsHeap.pop();
-
-    if (canBePlaced(cell, nearest.x, nearest.y)) {
-      return PixelPt(
-          grid_->gridPixel(nearest.x, nearest.y), nearest.x, nearest.y);
-    }
-
-    // Put neighbors in the queue
-    for (GridPt offset : neighbors) {
-      GridPt neighbor = {nearest.x + offset.x, nearest.y + offset.y};
-      // Check if it was already put in the queue
-      if (visited.count(neighbor) > 0) {
-        continue;
+  const int max_dist = max_displacement_x_ + max_displacement_y_;
+  for (int d = 0; d <= max_dist; ++d) {
+    for (int xo = -d; xo <= d; ++xo) {  // x offset
+      GridX grid_x = x + xo;
+      int yo = d - std::abs(xo);  // y offset
+      GridY grid_y = y + yo;
+      if (check_pt(grid_x, grid_y)) {
+        return PixelPt(grid_->gridPixel(grid_x, grid_y), grid_x, grid_y);
       }
-      // Check limits
-      if (neighbor.x < x_min || neighbor.x > x_max || neighbor.y < y_min
-          || neighbor.y > y_max) {
-        continue;
+      if (yo != 0) {  // if y offset is not 0, then we need to check -yo
+        grid_y = y - yo;
+        if (check_pt(grid_x, grid_y)) {
+          return PixelPt(grid_->gridPixel(grid_x, grid_y), grid_x, grid_y);
+        }
       }
-
-      visited.insert(neighbor);
-      positionsHeap.push(PQ_entry{calcDist(center, neighbor), neighbor});
     }
   }
+
   return PixelPt();
 }
 
