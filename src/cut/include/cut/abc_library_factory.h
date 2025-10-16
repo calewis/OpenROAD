@@ -42,7 +42,7 @@ class AbcLibrary
   void InitializeConstGates();
 
   utl::UniquePtrWithDeleter<abc::SC_Lib> abc_library_;
-  abc::Mio_Library_t* mio_library_;
+  utl::UniquePtrWithDeleter<abc::Mio_Library_t> mio_library_;
   std::set<std::string> supported_cells_;
   std::unordered_set<std::string> const1_gates_;
   std::unordered_set<std::string> const0_gates_;
