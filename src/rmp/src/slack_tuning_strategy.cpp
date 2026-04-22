@@ -28,7 +28,8 @@
 namespace rmp {
 
 // The magic numbers are defaults from abc/src/base/abci/abc.c
-constexpr size_t kSearchResizeIters = 100;
+// Reduced kSearchResizeIters to 10 for faster evaluation in GA search
+constexpr size_t kSearchResizeIters = 10;
 constexpr size_t kFinalResizeIters = 1000;
 
 using utl::RMP;
