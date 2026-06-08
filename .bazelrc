@@ -73,7 +73,7 @@ build --copt "-Wno-cast-function-type-mismatch"  --host_copt "-Wno-cast-function
 build --copt "-Wno-unused-but-set-variable"  --host_copt "-Wno-unused-but-set-variable"
 build --cxxopt "-Wno-deprecated-copy"  --host_cxxopt "-Wno-deprecated-copy"
 build --cxxopt "-Wno-deprecated-copy-with-user-provided-copy"  --host_cxxopt "-Wno-deprecated-copy-with-user-provided-copy"
-build --cxxopt "-Wno-dangling"  --host_cxxopt "-Wno-dangling"
+build --copt "-Werror=dangling" --host_copt "-Werror=dangling"
 
 # For 3rd party code: Disable warnings entirely.
 # They are not actionable and just create noise.
