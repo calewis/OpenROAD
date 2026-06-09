@@ -75,6 +75,8 @@ build --cxxopt "-Wno-deprecated-copy"  --host_cxxopt "-Wno-deprecated-copy"
 build --cxxopt "-Wno-deprecated-copy-with-user-provided-copy"  --host_cxxopt "-Wno-deprecated-copy-with-user-provided-copy"
 build --cxxopt "-Wno-dangling"  --host_cxxopt "-Wno-dangling"
 
+build --copt "-Werror=align-mismatch" --host_copt "-Werror=align-mismatch"
+
 # For 3rd party code: Disable warnings entirely.
 # They are not actionable and just create noise.
 build --per_file_copt=.*external/.*@-w
