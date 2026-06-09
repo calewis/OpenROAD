@@ -131,7 +131,7 @@ OPENROAD_LIBRARY_DEPS = [
 # globally to every cc_* target (-Wall, -Wextra, -Wno-sign-compare,
 # -Wno-unused-parameter, etc.) live in .bazelrc — do not repeat them here.
 OPENROAD_COPTS = [
-    "-Wno-error",
+    # "-Wno-error",
     "-pedantic",
     "-Wno-cast-qual",  # typically from TCL swigging
     "-Wno-missing-braces",  # typically from TCL swigging
