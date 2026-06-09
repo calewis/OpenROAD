@@ -63,6 +63,7 @@ build --copt "-Wno-nullability-extension" --host_copt "-Wno-nullability-extensio
 build --copt "-Wno-deprecated-declarations" --host_copt "-Wno-deprecated-declarations"
 build --copt "-Wno-unused-local-typedef" --host_copt "-Wno-unused-local-typedef"
 build --cxxopt "-Wno-c++20-designator"   --host_cxxopt "-Wno-c++20-designator"
+build --copt "-Werror=array-parameter" --host_copt "-Werror=array-parameter"
 
 # The warning acceptance bar in CI for PRs is set by -Werror of a specific
 # version of some chosen compiler. Disable warnings from other compilers until
