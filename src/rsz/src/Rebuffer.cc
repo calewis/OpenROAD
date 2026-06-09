@@ -714,9 +714,9 @@ BnetPtr Rebuffer::bufferForTiming(const BnetPtr& tree,
               int dx = node->location().x() - location.x();
               int dy = node->location().y() - location.y();
 
-              if (abs(dx) + abs(dy) >= step) {
-                const float ratio
-                    = (float) abs(dx) / (float) (abs(dx) + abs(dy));
+              if (std::abs(dx) + std::abs(dy) >= step) {
+                const float ratio = (float) std::abs(dx)
+                                    / (float) (std::abs(dx) + std::abs(dy));
                 const int dx_abs = std::min((int) (ratio * step), step);
                 const int dy_abs = step - dx_abs;
                 dx = dx > 0 ? dx_abs : -dx_abs;

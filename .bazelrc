@@ -49,6 +49,7 @@ build  --cxxopt=-fexceptions    --host_cxxopt=-fexceptions
 # Turn warnings on...
 build --copt "-Wall"               --host_copt "-Wall"
 build --copt "-Wextra"             --host_copt "-Wextra"
+build --copt "-Werror=absolute-value" --host_copt "-Werror=absolute-value"
 
 # ... and disable the warnings we're not interested in.
 build --copt "-Wno-sign-compare"          --host_copt "-Wno-sign-compare"
