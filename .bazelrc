@@ -49,6 +49,8 @@ build  --cxxopt=-fexceptions    --host_cxxopt=-fexceptions
 # Turn warnings on...
 build --copt "-Wall"               --host_copt "-Wall"
 build --copt "-Wextra"             --host_copt "-Wextra"
+build --copt "-Werror=fortify-source" --host_copt "-Werror=fortify-source"
+build --copt "-Werror=user-defined-warnings" --host_copt "-Werror=user-defined-warnings"
 
 # ... and disable the warnings we're not interested in.
 build --copt "-Wno-sign-compare"          --host_copt "-Wno-sign-compare"
