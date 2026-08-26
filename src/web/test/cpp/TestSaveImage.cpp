@@ -278,8 +278,19 @@ TEST_F(SaveImageTest, EmptyDesign)
   unsigned w = 0, h = 0;
   auto pixels = decodePngFile(path, w, h);
   EXPECT_EQ(w, 256u);
-  // Empty design should produce a transparent image.
-  EXPECT_FALSE(hasNonTransparentPixel(pixels));
+  // With no instances the only thing drawn is the die outline (the
+  // _instances pass draws it for every design), so every visible pixel must
+  // be outline gray.  Before tiles were rendered at the output scale the
+  // outline was lost to the nearest-neighbor decimation and this asserted a
+  // fully transparent image.
+  for (size_t i = 0; i < pixels.size(); i += 4) {
+    if (pixels[i + 3] == 0) {
+      continue;
+    }
+    EXPECT_EQ(pixels[i + 0], 128u);
+    EXPECT_EQ(pixels[i + 1], 128u);
+    EXPECT_EQ(pixels[i + 2], 128u);
+  }
 }
 
 TEST_F(SaveImageTest, LargeWidthClamped)

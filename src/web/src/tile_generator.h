@@ -40,7 +40,8 @@ class HeatMapDataSource;
 
 namespace utl {
 class Logger;
-}
+class ThreadPool;
+}  // namespace utl
 
 namespace web {
 
@@ -864,6 +865,13 @@ class TileGenerator
   sta::dbSta* sta_;
   utl::Logger* logger_;
   int num_threads_ = 0;
+  // Worker pool for renderImageBuffer, kept across calls (a GIF is many
+  // frames) so the threads and their thread_local scratch buffers are reused.
+  // Built on first use for the configured thread count.
+  utl::ThreadPool* renderPool(int num_threads) const;
+  mutable std::mutex render_pool_mutex_;
+  mutable std::unique_ptr<utl::ThreadPool> render_pool_;
+  mutable int render_pool_threads_ = 0;
   std::unique_ptr<Search> search_;
   int pin_label_margin_dbu_ = 0;  // cached by computePinLabelMargin()
 

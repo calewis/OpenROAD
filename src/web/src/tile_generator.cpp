@@ -200,6 +200,9 @@ void compositeTile(std::span<const unsigned char> tile,
                    const int oy)
 {
   const size_t row_bytes = static_cast<size_t>(dim) * 4;
+  if (tile.size() < row_bytes * dim) {
+    return;  // empty (error) tile
+  }
   for (int py = 0; py < dim; ++py) {
     const unsigned char* srow = &tile[py * row_bytes];
     if (!anyNonZero({srow, row_bytes})) {
@@ -214,27 +217,33 @@ void compositeTile(std::span<const unsigned char> tile,
   }
 }
 
-// Splits [0, n) into up to `threads` contiguous ranges and runs
-// fn(begin, end) on each, on `pool` when given and on the calling thread
-// otherwise.  The first exception thrown by a worker is rethrown here.
+// Runs fn(i) for i in [0, n) on `pool` (or inline when no pool / one
+// chunk).  Work is dealt round-robin: item i goes to worker i % chunks.  Tiles
+// and image rows are far from uniform in cost (die edges and the bloat margin
+// are empty, the core is dense), so interleaving balances the workers far
+// better than contiguous bands.  The first exception thrown by a worker is
+// rethrown here.
 template <typename F>
-void parallelRanges(utl::ThreadPool* pool,
-                    const int threads,
-                    const int n,
-                    const F& fn)
+void parallelFor(utl::ThreadPool* pool,
+                 const int threads,
+                 const int n,
+                 const F& fn)
 {
   const int chunks = std::min(n, threads);
   if (pool == nullptr || chunks <= 1) {
-    fn(0, n);
+    for (int i = 0; i < n; ++i) {
+      fn(i);
+    }
     return;
   }
   std::vector<utl::ThreadPoolFuture<void>> futures;
   futures.reserve(chunks);
   for (int t = 0; t < chunks; ++t) {
-    const int begin = static_cast<int>((static_cast<int64_t>(t) * n) / chunks);
-    const int end
-        = static_cast<int>((static_cast<int64_t>(t + 1) * n) / chunks);
-    futures.push_back(pool->submit([&fn, begin, end]() { fn(begin, end); }));
+    futures.push_back(pool->submit([&fn, t, n, chunks]() {
+      for (int i = t; i < n; i += chunks) {
+        fn(i);
+      }
+    }));
   }
   // get() (not wait()) so an exception thrown in a worker propagates to the
   // caller instead of silently yielding a partial image.
@@ -4726,6 +4735,20 @@ static std::vector<unsigned char> lanczos2Downsample(
   return dst;
 }
 
+utl::ThreadPool* TileGenerator::renderPool(const int num_threads) const
+{
+  if (num_threads <= 1) {
+    return nullptr;
+  }
+  const std::lock_guard<std::mutex> lock(render_pool_mutex_);
+  if (!render_pool_ || render_pool_threads_ != num_threads) {
+    render_pool_.reset();  // join the old workers before starting new ones
+    render_pool_ = std::make_unique<utl::ThreadPool>(num_threads);
+    render_pool_threads_ = num_threads;
+  }
+  return render_pool_.get();
+}
+
 std::vector<unsigned char> TileGenerator::renderImageBuffer(
     const odb::Rect& region,
     const int width_px,
@@ -4789,17 +4812,24 @@ std::vector<unsigned char> TileGenerator::renderImageBuffer(
   const int final_w = static_cast<int>(std::ceil(area.dx() * scale));
   const int final_h = static_cast<int>(std::ceil(area.dy() * scale));
 
-  // Compute zoom level that gives tile_scale close to our target scale.
-  // tile_scale = kTileSizeInPixel / (maxDXDY / 2^z)
-  // We want tile_scale >= scale, so z = ceil(log2(scale * maxDXDY / 256)).
+  // Zoom level and tile size.  Pick the deepest z whose 256 px tiles are no
+  // finer than the target scale, then render each tile at
+  // tile_px = round(scale * tile_dbu) in [256, 512) pixels (renderTileBuffer
+  // takes an explicit tile size).  The tile grid then matches the output
+  // grid to within one part in 256, so the nearest-neighbor resample below is
+  // (nearly) an identity: it neither rasterizes up to 4x the output pixels,
+  // as ceil(z) at 256 px did, nor re-aliases the band-limited tiles by
+  // dropping every other row.
   const odb::Rect bounds = getBounds();
   const double max_dxdy = bounds.maxDXDY();
   const int z = std::max(0,
-                         static_cast<int>(std::ceil(
+                         static_cast<int>(std::floor(
                              std::log2(scale * max_dxdy / kTileSizeInPixel))));
-  const int num_tiles = static_cast<int>(std::pow(2, z));
+  const int num_tiles = 1 << z;
   const double tile_dbu_size = max_dxdy / num_tiles;
-  const double tile_scale = kTileSizeInPixel / tile_dbu_size;
+  const int tile_px
+      = std::max(1, static_cast<int>(std::lround(scale * tile_dbu_size)));
+  const double tile_scale = tile_px / tile_dbu_size;
 
   // Determine which tiles overlap our area.
   const int tx_min = std::max(
@@ -4819,8 +4849,8 @@ std::vector<unsigned char> TileGenerator::renderImageBuffer(
   const int total_tiles_x = tx_max - tx_min + 1;
   const int total_tiles_y = ty_max - ty_min + 1;
   const int total_tiles = total_tiles_x * total_tiles_y;
-  const int tile_span_w = total_tiles_x * kTileSizeInPixel;
-  const int tile_span_h = total_tiles_y * kTileSizeInPixel;
+  const int tile_span_w = total_tiles_x * tile_px;
+  const int tile_span_h = total_tiles_y * tile_px;
   std::vector<unsigned char> output(4UL * tile_span_w * tile_span_h, 0);
 
   const std::vector<std::string> layers_to_render
@@ -4837,47 +4867,48 @@ std::vector<unsigned char> TileGenerator::renderImageBuffer(
   // `output`, so tiles render concurrently without locking.
   const int num_threads
       = num_threads_ > 0 ? num_threads_ : (sta_ ? sta_->threadCount() : 1);
-  std::unique_ptr<utl::ThreadPool> thread_pool;
-  if (num_threads > 1 && total_tiles > 1) {
-    thread_pool = std::make_unique<utl::ThreadPool>(num_threads);
-  }
+  utl::ThreadPool* thread_pool = renderPool(num_threads);
 
-  auto render_tiles = [&](const int start_tile, const int end_tile) {
-    for (int tile_idx = start_tile; tile_idx < end_tile; ++tile_idx) {
-      const int tx = tx_min + (tile_idx % total_tiles_x);
-      const int ty = ty_min + (tile_idx / total_tiles_x);
-      const int out_ox = (tx - tx_min) * kTileSizeInPixel;
-      // Y is flipped: ty is bottom-up, output is top-down.
-      const int out_oy = (ty_max - ty) * kTileSizeInPixel;
-      // Leaflet-style y coordinate (before the flip in renderTileBuffer).
-      const int leaflet_y = num_tiles - 1 - ty;
+  auto render_tile = [&](const int tile_idx) {
+    const int tx = tx_min + (tile_idx % total_tiles_x);
+    const int ty = ty_min + (tile_idx / total_tiles_x);
+    const int out_ox = (tx - tx_min) * tile_px;
+    // Y is flipped: ty is bottom-up, output is top-down.
+    const int out_oy = (ty_max - ty) * tile_px;
+    // Leaflet-style y coordinate (before the flip in renderTileBuffer).
+    const int leaflet_y = num_tiles - 1 - ty;
 
-      for (const auto& layer : layers_to_render) {
-        const auto tile_buf = renderTileBuffer(layer, z, tx, leaflet_y, vis);
-        compositeTile(tile_buf,
-                      kTileSizeInPixel,
-                      output.data(),
-                      tile_span_w,
-                      out_ox,
-                      out_oy);
-      }
+    for (const auto& layer : layers_to_render) {
+      const auto tile_buf = renderTileBuffer(layer,
+                                             z,
+                                             tx,
+                                             leaflet_y,
+                                             vis,
+                                             /*highlight_rects=*/{},
+                                             /*highlight_polys=*/{},
+                                             /*colored_rects=*/{},
+                                             /*flight_lines=*/{},
+                                             /*module_colors=*/nullptr,
+                                             /*focus_net_ids=*/nullptr,
+                                             /*route_guide_net_ids=*/nullptr,
+                                             /*dpr=*/1.0,
+                                             tile_px);
+      compositeTile(
+          tile_buf, tile_px, output.data(), tile_span_w, out_ox, out_oy);
+    }
 
-      // User text labels go on top of all layers (Qt parity: labels appear
-      // in save_image).
-      if (!labels.empty()) {
-        const auto label_buf = renderLabelTile(z, tx, leaflet_y, labels);
-        if (!label_buf.empty()) {
-          compositeTile(label_buf,
-                        kTileSizeInPixel,
-                        output.data(),
-                        tile_span_w,
-                        out_ox,
-                        out_oy);
-        }
+    // User text labels go on top of all layers (Qt parity: labels appear
+    // in save_image).
+    if (!labels.empty()) {
+      const auto label_buf
+          = renderLabelTile(z, tx, leaflet_y, labels, /*dpr=*/1.0, tile_px);
+      if (!label_buf.empty()) {
+        compositeTile(
+            label_buf, tile_px, output.data(), tile_span_w, out_ox, out_oy);
       }
     }
   };
-  parallelRanges(thread_pool.get(), num_threads, total_tiles, render_tiles);
+  parallelFor(thread_pool, num_threads, total_tiles, render_tile);
 
   // Crop to the exact requested area.
   // The tile span covers a larger region; compute the pixel offset of the
@@ -4907,20 +4938,20 @@ std::vector<unsigned char> TileGenerator::renderImageBuffer(
   // image matches the viewer's background instead of coming out transparent.
   std::vector<unsigned char> final_buf(4UL * final_w * final_h);
 
-  auto resample_rows = [&](const int start_y, const int end_y) {
-    for (int fy = start_y; fy < end_y; ++fy) {
+  auto resample_row = [&](const int fy) {
+    {
       unsigned char* dst_row
           = &final_buf[static_cast<size_t>(fy) * final_w * 4];
       const int sy = map_y[fy];
       if (sy < 0 || sy >= tile_span_h) {
         fillSpan({dst_row, static_cast<size_t>(final_w * 4)}, bg);
-        continue;
+        return;
       }
       const unsigned char* src_row
           = &output[static_cast<size_t>(sy) * tile_span_w * 4];
       if (!anyNonZero({src_row, static_cast<size_t>(tile_span_w * 4)})) {
         fillSpan({dst_row, static_cast<size_t>(final_w * 4)}, bg);
-        continue;
+        return;
       }
       for (int fx = 0; fx < final_w; ++fx) {
         const int sx = map_x[fx];
@@ -4933,7 +4964,7 @@ std::vector<unsigned char> TileGenerator::renderImageBuffer(
     }
   };
 
-  parallelRanges(thread_pool.get(), num_threads, final_h, resample_rows);
+  parallelFor(thread_pool, num_threads, final_h, resample_row);
 
   if (out_width) {
     *out_width = final_w;
