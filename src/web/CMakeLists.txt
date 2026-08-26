@@ -125,6 +125,7 @@ target_sources(web
     src/search.cpp
     src/font_data.cpp
     src/glyph_cache.cpp
+    src/png_encoder.cpp
     src/tile_generator.cpp
     src/timing_report.cpp
     src/web.cpp
@@ -148,6 +149,7 @@ target_link_libraries(web
     dbSta_lib
     lodepng
     stb_truetype
+    ZLIB::ZLIB
     utl_lib
 )
 

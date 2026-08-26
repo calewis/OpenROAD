@@ -41,6 +41,8 @@
 #include "odb/dbTransform.h"
 #include "odb/dbTypes.h"
 #include "odb/geom.h"
+#include "parallel_for.h"
+#include "png_encoder.h"
 #include "request_handler.h"
 #include "search.h"
 #include "third-party/lodepng/lodepng.h"
@@ -214,41 +216,6 @@ void compositeTile(std::span<const unsigned char> tile,
     for (int px = 0; px < dim; ++px) {
       compositePixel(&drow[px * 4], &srow[px * 4]);
     }
-  }
-}
-
-// Runs fn(i) for i in [0, n) on `pool` (or inline when no pool / one
-// chunk).  Work is dealt round-robin: item i goes to worker i % chunks.  Tiles
-// and image rows are far from uniform in cost (die edges and the bloat margin
-// are empty, the core is dense), so interleaving balances the workers far
-// better than contiguous bands.  The first exception thrown by a worker is
-// rethrown here.
-template <typename F>
-void parallelFor(utl::ThreadPool* pool,
-                 const int threads,
-                 const int n,
-                 const F& fn)
-{
-  const int chunks = std::min(n, threads);
-  if (pool == nullptr || chunks <= 1) {
-    for (int i = 0; i < n; ++i) {
-      fn(i);
-    }
-    return;
-  }
-  std::vector<utl::ThreadPoolFuture<void>> futures;
-  futures.reserve(chunks);
-  for (int t = 0; t < chunks; ++t) {
-    futures.push_back(pool->submit([&fn, t, n, chunks]() {
-      for (int i = t; i < n; i += chunks) {
-        fn(i);
-      }
-    }));
-  }
-  // get() (not wait()) so an exception thrown in a worker propagates to the
-  // caller instead of silently yielding a partial image.
-  for (auto& f : futures) {
-    f.get();
   }
 }
 
@@ -4992,9 +4959,17 @@ std::vector<unsigned char> TileGenerator::renderImagePng(
     return {};  // renderImageBuffer already logged the error.
   }
 
-  // Encode to PNG.
-  std::vector<unsigned char> png_data;
-  const unsigned error = lodepng::encode(png_data, final_buf, final_w, final_h);
+  // Encode to PNG, deflating in parallel: at a few thousand pixels on a side
+  // the encode costs more than the render.
+  const int num_threads
+      = num_threads_ > 0 ? num_threads_ : (sta_ ? sta_->threadCount() : 1);
+  unsigned error = 0;
+  std::vector<unsigned char> png_data = encodePng(final_buf,
+                                                  final_w,
+                                                  final_h,
+                                                  renderPool(num_threads),
+                                                  num_threads,
+                                                  &error);
   if (error) {
     logger_->error(
         utl::WEB, 23, "PNG encode error: {}", lodepng_error_text(error));
