@@ -2286,10 +2286,10 @@ std::vector<unsigned char> TileGenerator::generateOverlayTile(
 
 // Forward declaration; defined below near compositePixel.  Separable Lanczos-2
 // decimation of a straight-alpha RGBA buffer (anti-moiré band-limit).
-static std::vector<unsigned char> lanczos2Downsample(
-    const std::vector<unsigned char>& src,
-    int src_dim,
-    int dst_dim);
+static bool lanczos2Downsample(std::vector<unsigned char>& src,
+                               int src_dim,
+                               int dst_dim,
+                               std::vector<unsigned char>& dst);
 
 namespace {
 
@@ -2898,12 +2898,18 @@ std::vector<unsigned char> TileGenerator::renderTileBuffer(
     // draws into this; it is Lanczos-2 decimated into world_image_buffer after
     // the loop, before the (crisp, output-resolution) overlays are drawn.
     // thread_local so the large buffer is reused across the tiles a thread
-    // renders without reallocating.
+    // renders without reallocating.  It is handed back transparent by the
+    // decimation below (which zeroes each row it consumes), so it only needs
+    // clearing here if the previous render was abandoned part-way (an
+    // exception between here and the decimation).
     static thread_local std::vector<unsigned char> super_buffer;
+    static thread_local bool super_buffer_dirty = false;
     if (super_buffer.size() != static_cast<size_t>(super_buffer_size)) {
-      super_buffer.resize(super_buffer_size);
+      super_buffer.assign(super_buffer_size, 0);
+    } else if (super_buffer_dirty) {
+      std::memset(super_buffer.data(), 0, super_buffer_size);
     }
-    std::memset(super_buffer.data(), 0, super_buffer_size);
+    super_buffer_dirty = true;
 
     // Per-chiplet rendering loop.  Mirrors RenderThread::drawChips() in
     // the Qt GUI: walks dbChip → dbChipInst → masterChip and draws each
@@ -4290,13 +4296,12 @@ std::vector<unsigned char> TileGenerator::renderTileBuffer(
     // Band-limit: Lanczos-2 decimate the supersampled fills into the output
     // tile.  This is the anti-moiré step — prefiltering the dense periodic
     // geometry so no beat survives at the output (physical) pixel grid.
-    // Empty tiles (common while panning) skip the decimation entirely:
-    // world_image_buffer already holds a transparent tile_px buffer, and a
-    // transparent super buffer cannot alias.  anyNonZero early-exits on the
-    // first drawn byte, so non-empty tiles pay almost nothing for the check.
-    if (anyNonZero(super_buffer)) {
-      world_image_buffer = lanczos2Downsample(super_buffer, super, tile_px);
-    }
+    // Empty tiles (common while panning) cost only the row scan: the
+    // decimation skips transparent rows and world_image_buffer already holds
+    // a transparent tile_px buffer.  The decimation also zeroes the super
+    // buffer behind itself, so it is clean for the next tile.
+    lanczos2Downsample(super_buffer, super, tile_px, world_image_buffer);
+    super_buffer_dirty = false;
 
     // Overlays draw at the OUTPUT resolution (crisp lines/text, not band-
     // limited), so they map DBU to pixels with the output-space scale.
@@ -4610,15 +4615,15 @@ static const std::vector<std::vector<std::pair<int, float>>>& getLanczos2Taps(
 // dst are square (tiles are square).  Generic-ratio version: per-output-pixel
 // tap lists, used for the border pixels of the 2:1 fast path below and as the
 // fallback for any other ratio.
-static std::vector<unsigned char> lanczos2DownsampleGeneric(
-    const std::vector<unsigned char>& src,
-    const int src_dim,
-    const int dst_dim)
+static bool lanczos2DownsampleGeneric(std::vector<unsigned char>& src,
+                                      const int src_dim,
+                                      const int dst_dim,
+                                      std::vector<unsigned char>& dst)
 {
-  std::vector<unsigned char> dst(static_cast<size_t>(dst_dim) * dst_dim * 4, 0);
   if (dst_dim <= 0) {
-    return dst;
+    return false;
   }
+  bool any = false;
 
   const std::vector<std::vector<std::pair<int, float>>>& taps
       = getLanczos2Taps(src_dim, dst_dim);
@@ -4642,6 +4647,7 @@ static std::vector<unsigned char> lanczos2DownsampleGeneric(
           inter_row, 0, static_cast<size_t>(dst_dim) * 4 * sizeof(float));
       continue;
     }
+    any = true;
 
     for (int ox = 0; ox < dst_dim; ++ox) {
       float r = 0, g = 0, b = 0, a = 0;
@@ -4663,6 +4669,12 @@ static std::vector<unsigned char> lanczos2DownsampleGeneric(
       out[2] = b;
       out[3] = a;
     }
+    // Consumed: hand the row back transparent (see lanczos2Downsample).
+    std::memset(
+        &src[static_cast<size_t>(sy) * src_row_bytes], 0, src_row_bytes);
+  }
+  if (!any) {
+    return false;
   }
 
   // Vertical pass: convolve along Y, un-premultiply, clamp (Lanczos
@@ -4701,7 +4713,7 @@ static std::vector<unsigned char> lanczos2DownsampleGeneric(
       d[3] = static_cast<unsigned char>(std::lround(ai));
     }
   }
-  return dst;
+  return true;
 }
 
 // Interior kernel of the 2:1 decimation: every output pixel o away from the
@@ -4742,17 +4754,35 @@ static Lanczos2x1Kernel buildLanczos2x1Kernel(
 // out[i] += w * row[i + shift] over the whole output row; the vertical pass is
 // the same over rows of the intermediate.  Fully transparent source rows are
 // skipped in both passes.
-static std::vector<unsigned char> lanczos2Downsample2x1(
-    const std::vector<unsigned char>& src,
+static bool lanczos2Downsample2x1(
+    std::vector<unsigned char>& src,
     const int src_dim,
     const int dst_dim,
-    const std::vector<std::vector<std::pair<int, float>>>& taps)
+    const std::vector<std::vector<std::pair<int, float>>>& taps,
+    std::vector<unsigned char>& dst)
 {
-  std::vector<unsigned char> dst(static_cast<size_t>(dst_dim) * dst_dim * 4, 0);
-  const Lanczos2x1Kernel kernel = buildLanczos2x1Kernel(taps, src_dim, dst_dim);
-  const int ntaps = static_cast<int>(kernel.offsets.size());
   const size_t out_floats = static_cast<size_t>(dst_dim) * 4;
   const size_t src_row_bytes = static_cast<size_t>(src_dim) * 4;
+
+  // Row scan first (read-only): an empty tile — most tile-layers of a sparse
+  // design — returns here without touching the float scratch buffers.  Rows
+  // flagged empty are never read by the vertical pass, so their intermediate
+  // rows are never written either.
+  std::vector<unsigned char> row_empty(src_dim, 1);
+  bool any = false;
+  for (int sy = 0; sy < src_dim; ++sy) {
+    if (anyNonZero(
+            {&src[static_cast<size_t>(sy) * src_row_bytes], src_row_bytes})) {
+      row_empty[sy] = 0;
+      any = true;
+    }
+  }
+  if (!any) {
+    return false;
+  }
+
+  const Lanczos2x1Kernel kernel = buildLanczos2x1Kernel(taps, src_dim, dst_dim);
+  const int ntaps = static_cast<int>(kernel.offsets.size());
 
   // Horizontal pass into inter[src_row][dst_col][4] (premultiplied float).
   static thread_local std::vector<float> inter;
@@ -4766,16 +4796,13 @@ static std::vector<unsigned char> lanczos2Downsample2x1(
   const size_t half_floats = (static_cast<size_t>(dst_dim) + 2 * kPad) * 4;
   even.assign(half_floats, 0.0f);
   odd.assign(half_floats, 0.0f);
-  std::vector<unsigned char> row_empty(src_dim, 1);
 
   for (int sy = 0; sy < src_dim; ++sy) {
-    const unsigned char* srow = &src[static_cast<size_t>(sy) * src_row_bytes];
-    float* inter_row = &inter[static_cast<size_t>(sy) * out_floats];
-    if (!anyNonZero({srow, src_row_bytes})) {
-      std::memset(inter_row, 0, out_floats * sizeof(float));
+    if (row_empty[sy]) {
       continue;
     }
-    row_empty[sy] = 0;
+    unsigned char* srow = &src[static_cast<size_t>(sy) * src_row_bytes];
+    float* inter_row = &inter[static_cast<size_t>(sy) * out_floats];
 
     // Premultiply + deinterleave: even[ox] = src[2ox], odd[ox] = src[2ox+1].
     float* e = &even[kPad * 4];
@@ -4836,6 +4863,8 @@ static std::vector<unsigned char> lanczos2Downsample2x1(
     for (int ox = kernel.last + 1; ox < dst_dim; ++ox) {
       border(ox);
     }
+    // Consumed: hand the row back transparent (see lanczos2Downsample).
+    std::memset(srow, 0, src_row_bytes);
   }
 
   // Vertical pass: each output row is a weighted sum of intermediate rows.
@@ -4896,19 +4925,24 @@ static std::vector<unsigned char> lanczos2Downsample2x1(
       d[3] = static_cast<unsigned char>(std::lround(ai));
     }
   }
-  return dst;
+  return true;
 }
 
-static std::vector<unsigned char> lanczos2Downsample(
-    const std::vector<unsigned char>& src,
-    const int src_dim,
-    const int dst_dim)
+// Decimates `src` into `dst` (dst_dim^2 RGBA, already transparent) and
+// returns whether any source row was non-transparent — the caller's "is this
+// tile empty" test, fused into the row scan the passes do anyway.  Every
+// source row is zeroed as it is consumed, so `src` is handed back fully
+// transparent: the caller reuses it for the next tile without a 1 MiB memset.
+static bool lanczos2Downsample(std::vector<unsigned char>& src,
+                               const int src_dim,
+                               const int dst_dim,
+                               std::vector<unsigned char>& dst)
 {
   if (dst_dim > 0 && src_dim == 2 * dst_dim) {
     return lanczos2Downsample2x1(
-        src, src_dim, dst_dim, getLanczos2Taps(src_dim, dst_dim));
+        src, src_dim, dst_dim, getLanczos2Taps(src_dim, dst_dim), dst);
   }
-  return lanczos2DownsampleGeneric(src, src_dim, dst_dim);
+  return lanczos2DownsampleGeneric(src, src_dim, dst_dim, dst);
 }
 
 utl::ThreadPool* TileGenerator::renderPool(const int num_threads) const
