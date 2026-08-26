@@ -4607,8 +4607,10 @@ static const std::vector<std::vector<std::pair<int, float>>>& getLanczos2Taps(
 // Separable Lanczos-2 downsample of a straight-alpha RGBA buffer from src_dim^2
 // to dst_dim^2.  Alpha is premultiplied before convolution and un-premultiplied
 // after (a straight-alpha convolution dark-fringes coverage edges).  src and
-// dst are square (tiles are square).
-static std::vector<unsigned char> lanczos2Downsample(
+// dst are square (tiles are square).  Generic-ratio version: per-output-pixel
+// tap lists, used for the border pixels of the 2:1 fast path below and as the
+// fallback for any other ratio.
+static std::vector<unsigned char> lanczos2DownsampleGeneric(
     const std::vector<unsigned char>& src,
     const int src_dim,
     const int dst_dim)
@@ -4700,6 +4702,213 @@ static std::vector<unsigned char> lanczos2Downsample(
     }
   }
   return dst;
+}
+
+// Interior kernel of the 2:1 decimation: every output pixel o away from the
+// border reads source samples 2o + offset[k] with the same weights, so the
+// convolution is a fixed set of strided AXPYs.  Derived from the generic taps
+// of a mid-tile pixel so both paths agree exactly.
+struct Lanczos2x1Kernel
+{
+  // Interior output range [first, last] where the fixed kernel applies.
+  int first = 0;
+  int last = -1;
+  std::vector<int> offsets;    // source index relative to 2o
+  std::vector<float> weights;  // normalized
+};
+
+static Lanczos2x1Kernel buildLanczos2x1Kernel(
+    const std::vector<std::vector<std::pair<int, float>>>& taps,
+    const int src_dim,
+    const int dst_dim)
+{
+  Lanczos2x1Kernel k;
+  const int mid = dst_dim / 2;
+  for (const auto& [sx, w] : taps[mid]) {
+    k.offsets.push_back(sx - 2 * mid);
+    k.weights.push_back(w);
+  }
+  const int min_off = k.offsets.front();
+  const int max_off = k.offsets.back();
+  // Interior: no tap clamps at either edge.
+  k.first = (-min_off + 1) / 2;
+  k.last = (src_dim - 1 - max_off) / 2;
+  k.last = std::min(k.last, dst_dim - 1);
+  return k;
+}
+
+// 2:1 fast path.  The horizontal pass premultiplies a source row into two
+// float rows (even and odd source pixels), so each kernel tap is a contiguous
+// out[i] += w * row[i + shift] over the whole output row; the vertical pass is
+// the same over rows of the intermediate.  Fully transparent source rows are
+// skipped in both passes.
+static std::vector<unsigned char> lanczos2Downsample2x1(
+    const std::vector<unsigned char>& src,
+    const int src_dim,
+    const int dst_dim,
+    const std::vector<std::vector<std::pair<int, float>>>& taps)
+{
+  std::vector<unsigned char> dst(static_cast<size_t>(dst_dim) * dst_dim * 4, 0);
+  const Lanczos2x1Kernel kernel = buildLanczos2x1Kernel(taps, src_dim, dst_dim);
+  const int ntaps = static_cast<int>(kernel.offsets.size());
+  const size_t out_floats = static_cast<size_t>(dst_dim) * 4;
+  const size_t src_row_bytes = static_cast<size_t>(src_dim) * 4;
+
+  // Horizontal pass into inter[src_row][dst_col][4] (premultiplied float).
+  static thread_local std::vector<float> inter;
+  inter.resize(static_cast<size_t>(src_dim) * out_floats);
+  static thread_local std::vector<float> even;
+  static thread_local std::vector<float> odd;
+  // Padded by the kernel reach on both sides so shifted reads stay in range;
+  // the padding is zero (the interior pixels never read it, the border
+  // pixels use the generic taps).
+  constexpr int kPad = 8;
+  const size_t half_floats = (static_cast<size_t>(dst_dim) + 2 * kPad) * 4;
+  even.assign(half_floats, 0.0f);
+  odd.assign(half_floats, 0.0f);
+  std::vector<unsigned char> row_empty(src_dim, 1);
+
+  for (int sy = 0; sy < src_dim; ++sy) {
+    const unsigned char* srow = &src[static_cast<size_t>(sy) * src_row_bytes];
+    float* inter_row = &inter[static_cast<size_t>(sy) * out_floats];
+    if (!anyNonZero({srow, src_row_bytes})) {
+      std::memset(inter_row, 0, out_floats * sizeof(float));
+      continue;
+    }
+    row_empty[sy] = 0;
+
+    // Premultiply + deinterleave: even[ox] = src[2ox], odd[ox] = src[2ox+1].
+    float* e = &even[kPad * 4];
+    float* o = &odd[kPad * 4];
+    for (int ox = 0; ox < dst_dim; ++ox) {
+      const unsigned char* p0 = &srow[static_cast<size_t>(2 * ox) * 4];
+      const unsigned char* p1 = p0 + 4;
+      const float a0 = p0[3];
+      const float a1 = p1[3];
+      const float s0 = a0 * (1.0f / 255.0f);
+      const float s1 = a1 * (1.0f / 255.0f);
+      e[ox * 4 + 0] = p0[0] * s0;
+      e[ox * 4 + 1] = p0[1] * s0;
+      e[ox * 4 + 2] = p0[2] * s0;
+      e[ox * 4 + 3] = a0;
+      o[ox * 4 + 0] = p1[0] * s1;
+      o[ox * 4 + 1] = p1[1] * s1;
+      o[ox * 4 + 2] = p1[2] * s1;
+      o[ox * 4 + 3] = a1;
+    }
+
+    // Interior: fixed kernel as contiguous AXPYs.
+    const int i0 = kernel.first * 4;
+    const int i1 = (kernel.last + 1) * 4;
+    std::memset(inter_row, 0, out_floats * sizeof(float));
+    for (int k = 0; k < ntaps; ++k) {
+      const int off = kernel.offsets[k];
+      const float w = kernel.weights[k];
+      // Source 2o + off: even row at o + off/2 for even off, odd row at
+      // o + (off - 1)/2 for odd off (floor division).
+      const int half = (off >= 0) ? off / 2 : -((-off + 1) / 2);
+      const float* base = ((off & 1) == 0) ? e : o;
+      const float* shifted = base + half * 4;
+      for (int i = i0; i < i1; ++i) {
+        inter_row[i] += w * shifted[i];
+      }
+    }
+    // Borders: generic taps.
+    auto border = [&](const int ox) {
+      float r = 0, g = 0, b = 0, a = 0;
+      for (const auto& [sx, w] : taps[ox]) {
+        const unsigned char* p = &srow[static_cast<size_t>(sx) * 4];
+        const float pa = p[3];
+        const float sw = w * pa * (1.0f / 255.0f);
+        r += p[0] * sw;
+        g += p[1] * sw;
+        b += p[2] * sw;
+        a += w * pa;
+      }
+      inter_row[ox * 4 + 0] = r;
+      inter_row[ox * 4 + 1] = g;
+      inter_row[ox * 4 + 2] = b;
+      inter_row[ox * 4 + 3] = a;
+    };
+    for (int ox = 0; ox < kernel.first; ++ox) {
+      border(ox);
+    }
+    for (int ox = kernel.last + 1; ox < dst_dim; ++ox) {
+      border(ox);
+    }
+  }
+
+  // Vertical pass: each output row is a weighted sum of intermediate rows.
+  static thread_local std::vector<float> acc;
+  acc.resize(out_floats);
+  for (int oy = 0; oy < dst_dim; ++oy) {
+    const bool interior = oy >= kernel.first && oy <= kernel.last;
+    bool any = false;
+    std::memset(acc.data(), 0, out_floats * sizeof(float));
+    if (interior) {
+      for (int k = 0; k < ntaps; ++k) {
+        const int sy = 2 * oy + kernel.offsets[k];
+        if (row_empty[sy]) {
+          continue;
+        }
+        any = true;
+        const float w = kernel.weights[k];
+        const float* row = &inter[static_cast<size_t>(sy) * out_floats];
+        for (size_t i = 0; i < out_floats; ++i) {
+          acc[i] += w * row[i];
+        }
+      }
+    } else {
+      for (const auto& [sy, w] : taps[oy]) {
+        if (row_empty[sy]) {
+          continue;
+        }
+        any = true;
+        const float* row = &inter[static_cast<size_t>(sy) * out_floats];
+        for (size_t i = 0; i < out_floats; ++i) {
+          acc[i] += w * row[i];
+        }
+      }
+    }
+    unsigned char* drow = &dst[static_cast<size_t>(oy) * out_floats];
+    if (!any) {
+      continue;  // dst is already zero
+    }
+    // Un-premultiply, clamp (Lanczos overshoots).
+    for (int ox = 0; ox < dst_dim; ++ox) {
+      const float* p = &acc[ox * 4];
+      unsigned char* d = &drow[ox * 4];
+      const float ai = std::clamp(p[3], 0.0f, 255.0f);
+      // Alpha below 0.5 rounds to 0 below; emit a fully-zero pixel rather
+      // than (255/ai)-amplified colour under a zero alpha, which would defeat
+      // the transparent-buffer early exits downstream.
+      if (ai < 0.5f) {
+        continue;
+      }
+      const float inv_ai = 255.0f / ai;
+      const auto unpremult = [&](const float ch) {
+        return static_cast<unsigned char>(
+            std::lround(std::clamp(ch * inv_ai, 0.0f, 255.0f)));
+      };
+      d[0] = unpremult(p[0]);
+      d[1] = unpremult(p[1]);
+      d[2] = unpremult(p[2]);
+      d[3] = static_cast<unsigned char>(std::lround(ai));
+    }
+  }
+  return dst;
+}
+
+static std::vector<unsigned char> lanczos2Downsample(
+    const std::vector<unsigned char>& src,
+    const int src_dim,
+    const int dst_dim)
+{
+  if (dst_dim > 0 && src_dim == 2 * dst_dim) {
+    return lanczos2Downsample2x1(
+        src, src_dim, dst_dim, getLanczos2Taps(src_dim, dst_dim));
+  }
+  return lanczos2DownsampleGeneric(src, src_dim, dst_dim);
 }
 
 utl::ThreadPool* TileGenerator::renderPool(const int num_threads) const
