@@ -3121,7 +3121,7 @@ std::vector<unsigned char> TileGenerator::renderTileBuffer(
               (int) std::ceil((inst_bbox.yMax() - dbu_y_min) * scale));
           for (int iy = pyl; iy < pyh; ++iy) {
             for (int ix = pxl; ix < pxh; ++ix) {
-              blendPixel(image_buffer, ix, super - 1 - iy, c);
+              blendPixel(image_buffer, ix, super - 1 - iy, c, super);
             }
           }
         }
@@ -3437,13 +3437,13 @@ std::vector<unsigned char> TileGenerator::renderTileBuffer(
             if (dbu_x_min <= xl && xl <= dbu_x_max) {
               for (int iy = loop_yl; iy < loop_yh; ++iy) {
                 const int draw_y = (super - 1 - iy);
-                setPixel(image_buffer, draw_xl, draw_y, gray);
+                setPixel(image_buffer, draw_xl, draw_y, gray, super);
               }
             }
             if (dbu_x_min <= xh && xh <= dbu_x_max) {
               for (int iy = loop_yl; iy < loop_yh; ++iy) {
                 const int draw_y = (super - 1 - iy);
-                setPixel(image_buffer, draw_xh, draw_y, gray);
+                setPixel(image_buffer, draw_xh, draw_y, gray, super);
               }
             }
             if (dbu_y_min <= yl && yl <= dbu_y_max) {
@@ -3993,7 +3993,8 @@ std::vector<unsigned char> TileGenerator::renderTileBuffer(
             for (int iy = draw.yMin(); iy < draw.yMax(); ++iy) {
               for (int ix = draw.xMin(); ix < draw.xMax(); ++ix) {
                 if (((ix + ox) + (iy + oy)) % kPixelPeriod < kLineWidth) {
-                  blendPixel(image_buffer, ix, super - 1 - iy, hash_color);
+                  blendPixel(
+                      image_buffer, ix, super - 1 - iy, hash_color, super);
                 }
               }
             }
@@ -4027,7 +4028,8 @@ std::vector<unsigned char> TileGenerator::renderTileBuffer(
             for (int iy = draw.yMin(); iy < draw.yMax(); ++iy) {
               for (int ix = draw.xMin(); ix < draw.xMax(); ++ix) {
                 if (((ix + ox) + (iy + oy)) % kPixelPeriod < kLineWidth) {
-                  blendPixel(image_buffer, ix, super - 1 - iy, hash_color);
+                  blendPixel(
+                      image_buffer, ix, super - 1 - iy, hash_color, super);
                 }
               }
             }
@@ -4065,12 +4067,16 @@ std::vector<unsigned char> TileGenerator::renderTileBuffer(
           auto draw_outline = [&](const odb::Rect& rect) {
             const odb::Rect draw = toPixels(frame, rect);
             for (int ix = draw.xMin(); ix <= draw.xMax(); ++ix) {
-              blendPixel(image_buffer, ix, super - 1 - draw.yMin(), row_color);
-              blendPixel(image_buffer, ix, super - 1 - draw.yMax(), row_color);
+              blendPixel(
+                  image_buffer, ix, super - 1 - draw.yMin(), row_color, super);
+              blendPixel(
+                  image_buffer, ix, super - 1 - draw.yMax(), row_color, super);
             }
             for (int iy = draw.yMin(); iy <= draw.yMax(); ++iy) {
-              blendPixel(image_buffer, draw.xMin(), super - 1 - iy, row_color);
-              blendPixel(image_buffer, draw.xMax(), super - 1 - iy, row_color);
+              blendPixel(
+                  image_buffer, draw.xMin(), super - 1 - iy, row_color, super);
+              blendPixel(
+                  image_buffer, draw.xMax(), super - 1 - iy, row_color, super);
             }
           };
 
@@ -4287,7 +4293,7 @@ std::vector<unsigned char> TileGenerator::renderTileBuffer(
                 .b = local_image_buffer[src_idx + 2],
                 .a = a_src,
             };
-            blendPixel(super_buffer, px_w, py_w, src_color);
+            blendPixel(super_buffer, px_w, py_w, src_color, super);
           }
         }
       }
