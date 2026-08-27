@@ -663,6 +663,11 @@ void report_design_area_metrics_cmd()
   odb::blockMetrics(block, getLogger());
 }
 
+void clear_design_cmd(bool clear_all)
+{
+  OpenRoad::openRoad()->clearDesign(clear_all);
+}
+
 } // namespace ord
 
 %} // inline

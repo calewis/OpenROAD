@@ -535,6 +535,19 @@ proc place_inst { args } {
   $inst setPlacementStatus $placement_status
 }
 
+sta::define_cmd_args "clear_design" {
+  [-all]
+}
+
+proc clear_design { args } {
+  sta::parse_key_args "clear_design" args \
+    keys {} \
+    flags {-all}
+
+  set clear_all [info exists flags(-all)]
+  ord::clear_design_cmd $clear_all
+}
+
 ################################################################
 
 namespace eval ord {

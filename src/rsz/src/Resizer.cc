@@ -626,6 +626,15 @@ void Resizer::init()
   swappable_cells_cache_.clear();
 }
 
+void Resizer::reset()
+{
+  block_ = nullptr;
+  core_ = odb::Rect();
+  core_exists_ = false;
+  net_slack_map_.clear();
+  swappable_cells_cache_.clear();
+}
+
 // remove all buffers if no buffers are specified
 void Resizer::removeBuffers(const sta::InstanceSeq& insts)
 {

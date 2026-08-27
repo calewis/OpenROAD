@@ -917,6 +917,8 @@ void dbNetwork::clear()
 {
   ConcreteNetwork::clear();
   db_ = nullptr;
+  block_ = nullptr;
+  top_cell_ = nullptr;
   top_chip_ = nullptr;
   block_to_chip_inst_.clear();
   block_disc_.clear();
@@ -927,6 +929,9 @@ void dbNetwork::clear()
   bump_to_chip_net_.clear();
   chip_inst_to_unfolded_.clear();
   chip_net_to_unfolded_.clear();
+  hier_modules_.clear();
+  unfolded_cache_net_count_ = 0;
+  unfolded_built_ = false;
 }
 
 ////////////////////////////////////////////////////////////////
@@ -2946,6 +2951,23 @@ void dbNetwork::readDefAfter(dbBlock* block)
   db_ = block->getDataBase();
   block_ = block;
   readDbNetlistAfter();
+}
+
+void dbNetwork::clearDesign()
+{
+  block_ = nullptr;
+  top_chip_ = nullptr;
+  top_cell_ = nullptr;
+  block_to_chip_inst_.clear();
+  block_disc_.clear();
+  chip_master_cells_.clear();
+  chip_master_lib_ = nullptr;
+  bump_to_chip_net_.clear();
+  chip_inst_to_unfolded_.clear();
+  chip_net_to_unfolded_.clear();
+  hier_modules_.clear();
+  unfolded_cache_net_count_ = 0;
+  unfolded_built_ = false;
 }
 
 // Make ConcreteLibrary/Cell/Port objects for the

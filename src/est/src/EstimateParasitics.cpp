@@ -433,6 +433,16 @@ void EstimateParasitics::initChip(odb::dbChip* chip)
   initBlock();
 }
 
+void EstimateParasitics::reset()
+{
+  if (db_cbk_ && db_cbk_->hasOwner()) {
+    db_cbk_->removeOwner();
+  }
+  block_ = nullptr;
+  parasitics_src_ = ParasiticsSrc::kNone;
+  parasitics_invalid_.clear();
+}
+
 void EstimateParasitics::ensureParasitics()
 {
   estimateParasitics(global_router_->haveRoutes()

@@ -389,6 +389,37 @@ void dbSta::postReadDef(odb::dbBlock* block)
   }
 }
 
+void dbSta::clear()
+{
+  if (db_cbk_) {
+    db_cbk_->removeOwner();
+  }
+  chiplet_cbks_.clear();
+  levelized_drvr_vertices_.clear();
+  drvr_vertices_level_valid_ = false;
+  Sta::clear();
+  if (db_network_) {
+    db_network_->clear();
+    db_network_->init(db_, logger_);
+  }
+  updateComponentsState();
+}
+
+void dbSta::clearDesign()
+{
+  if (db_cbk_) {
+    db_cbk_->removeOwner();
+  }
+  chiplet_cbks_.clear();
+  levelized_drvr_vertices_.clear();
+  drvr_vertices_level_valid_ = false;
+  Sta::clearDesign();
+  if (db_network_) {
+    db_network_->clearDesign();
+  }
+  updateComponentsState();
+}
+
 void dbSta::postRead3Dbx(odb::dbChip* chip)
 {
   if (chip == nullptr) {

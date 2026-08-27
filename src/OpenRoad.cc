@@ -651,6 +651,51 @@ void OpenRoad::designCreated()
   db_->triggerPostReadDb();
 }
 
+void OpenRoad::clearDesign(bool clear_all)
+{
+  if (resizer_) {
+    resizer_->reset();
+  }
+  if (replace_) {
+    replace_->reset();
+  }
+  if (global_router_) {
+    global_router_->clear();
+  }
+  if (ioPlacer_) {
+    ioPlacer_->clear();
+    ioPlacer_->clearConstraints();
+  }
+  if (estimate_parasitics_) {
+    estimate_parasitics_->reset();
+  }
+  if (pdngen_) {
+    pdngen_->reset();
+  }
+  if (pdnsim_) {
+    pdnsim_->clearSolvers();
+  }
+  if (clear_all) {
+    if (sta_) {
+      sta_->clear();
+    }
+    if (db_) {
+      db_->clear();
+    }
+  } else {
+    if (sta_) {
+      sta_->clearDesign();
+    }
+    if (db_) {
+      db_->clearChip();
+    }
+  }
+  delete verilog_reader_;
+  verilog_reader_ = nullptr;
+  delete verilog_network_;
+  verilog_network_ = new dbVerilogNetwork(sta_);
+}
+
 bool OpenRoad::unitsInitialized()
 {
   // Units are set by the first liberty library read.

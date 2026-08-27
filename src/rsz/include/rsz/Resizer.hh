@@ -528,6 +528,7 @@ class Resizer : public sta::dbStaState, public sta::dbNetworkObserver
 
   ////////////////////////////////////////////////////////////////
   void initBlock();
+  void reset();
   void journalBeginTest();
   void journalRestoreTest();
   void eliminateDeadLogic(bool clean_nets);

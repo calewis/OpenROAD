@@ -5,6 +5,7 @@ or_integration_tests(
     get_core_die_areas
     ord_tclsh_completion
     place_inst
+    reusability_multiphase
     timing_api
     timing_api_2
     timing_api_3

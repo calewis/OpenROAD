@@ -76,6 +76,7 @@ class dbNetwork : public ConcreteNetwork
   void readDefAfter(odb::dbBlock* block);
   void readDbAfter(odb::dbDatabase* db);
   void readLibertyAfter(LibertyLibrary* lib) override;
+  void clearDesign();
 
   void addObserver(dbNetworkObserver* observer);
   void removeObserver(dbNetworkObserver* observer);
@@ -492,9 +493,19 @@ class dbNetwork : public ConcreteNetwork
 
   // hierarchy handler, set in openroad tested in network child traverserser
 
-  void setHierarchy() { db_->setHierarchy(true); }
-  void disableHierarchy() { db_->setHierarchy(false); }
-  bool hasHierarchy() const { return db_->hasHierarchy(); }
+  void setHierarchy()
+  {
+    if (db_) {
+      db_->setHierarchy(true);
+    }
+  }
+  void disableHierarchy()
+  {
+    if (db_) {
+      db_->setHierarchy(false);
+    }
+  }
+  bool hasHierarchy() const { return db_ != nullptr && db_->hasHierarchy(); }
   bool hasHierarchicalElements() const;
   void reassociateHierFlatNet(odb::dbModNet* mod_net,
                               odb::dbNet* new_flat_net,

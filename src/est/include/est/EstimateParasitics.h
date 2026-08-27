@@ -213,6 +213,7 @@ class EstimateParasitics : public sta::dbStaState, public ParasiticsService
 
   void initBlock();
   void initChip(odb::dbChip* chip);
+  void reset();
 
   utl::Logger* getLogger() { return logger_; }
 

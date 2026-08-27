@@ -876,6 +876,18 @@ dbChip* dbDatabase::getChip()
   return (dbChip*) db->chip_tbl_->getPtr(db->chip_);
 }
 
+void dbDatabase::clearChip()
+{
+  _dbDatabase* db = (_dbDatabase*) this;
+  if (db->chip_ != 0) {
+    dbChip* chip = (dbChip*) db->chip_tbl_->getPtr(db->chip_);
+    if (chip) {
+      dbChip::destroy(chip);
+    }
+    db->chip_ = 0;
+  }
+}
+
 void dbDatabase::constructUnfoldedModel()
 {
   _dbDatabase* db = (_dbDatabase*) this;
@@ -1110,9 +1122,13 @@ dbDatabase* dbDatabase::create()
 void dbDatabase::clear()
 {
   _dbDatabase* db = (_dbDatabase*) this;
+  utl::Logger* logger = db->logger_;
+  std::set<dbDatabaseObserver*> observers = db->observers_;
   int id = db->unique_id_;
   db->~_dbDatabase();
   new (db) _dbDatabase(db, id);
+  db->logger_ = logger;
+  db->observers_ = std::move(observers);
 }
 
 void dbDatabase::destroy(dbDatabase* db_)

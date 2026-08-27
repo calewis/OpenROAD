@@ -231,6 +231,10 @@ class OpenRoad
   // to notify the tools (eg dbSta, gui).
   void designCreated();
 
+  // Reset design netlist and tool states while preserving loaded Liberty
+  // timing models and cell libraries (if clear_all is false).
+  void clearDesign(bool clear_all = false);
+
   void read3Dbv(const std::string& filename);
   void read3Dbx(const std::string& filename);
   void write3Dbv(const std::string& filename);

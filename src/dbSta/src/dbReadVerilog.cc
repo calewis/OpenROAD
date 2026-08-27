@@ -105,7 +105,7 @@ void setDbNetworkLinkFunc(dbVerilogNetwork* network,
 Cell* dbVerilogNetwork::findAnyCell(std::string_view name)
 {
   Cell* cell = sta::ConcreteNetwork::findAnyCell(name);
-  if (cell == nullptr) {
+  if (cell == nullptr && db_network_) {
     cell = db_network_->findAnyCell(name);
   }
   return cell;

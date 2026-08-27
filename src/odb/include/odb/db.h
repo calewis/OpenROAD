@@ -7745,6 +7745,12 @@ class dbDatabase : public dbObject
   ///
   dbChip* getChip();
 
+  ///
+  /// Destroy the chip and blocks in this database, preserving technology and
+  /// libraries.
+  ///
+  void clearChip();
+
   void constructUnfoldedModel();
 
   ////////////////////////

@@ -155,6 +155,7 @@ COMPULSORY_TESTS = [
     "get_core_die_areas",
     "ord_tclsh_completion",
     "place_inst",
+    "reusability_multiphase",
     "upf_test",
     "upf_aes",
     "write_db",
