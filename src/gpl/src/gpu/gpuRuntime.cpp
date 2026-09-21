@@ -67,10 +67,19 @@ void ensureKokkosInitialized()
     if (Kokkos::is_initialized()) {
       return;
     }
-    // Keep Kokkos warnings enabled. In particular, Kokkos reports when the
-    // compiled CUDA architecture differs from the selected device. Compatible
-    // architectures can still run, but the mismatch may reduce performance.
-    Kokkos::initialize();
+    Kokkos::InitializationSettings settings;
+#ifdef KOKKOS_ENABLE_OPENMP
+    setenv("OMP_PROC_BIND", "false", 0);
+    const int max_threads = omp_get_max_threads();
+    if (std::getenv("OMP_NUM_THREADS") == nullptr) {
+      settings.set_num_threads(1);
+    }
+#endif
+    Kokkos::initialize(settings);
+#ifdef KOKKOS_ENABLE_OPENMP
+    // Restore global OpenMP thread count modified by Kokkos::OpenMP init.
+    omp_set_num_threads(max_threads);
+#endif
     std::atexit([] {
       if (Kokkos::is_initialized() && !Kokkos::is_finalized()) {
         Kokkos::finalize();

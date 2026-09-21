@@ -1,0 +1,114 @@
+# SPDX-License-Identifier: BSD-3-Clause
+# Copyright (c) 2026, The OpenROAD Authors
+
+load("@bazel_skylib//rules:write_file.bzl", "write_file")
+load(
+    "@openroad//bazel/gpu:copts.bzl",
+    "CUDA_ARCHS",
+    "CUDA_ARCH_COPTS",
+    "CUDA_ARCH_FLAG_ERROR",
+    "CUDA_TOOLKIT_COPTS",
+)
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
+
+_BACKENDS = [
+    "Serial",
+    "OpenMP",
+    "Cuda",
+]
+
+_CONFIG_HDRS = {
+    "core/src/KokkosCore_Config_DeclareBackend.hpp": [
+        "#pragma once",
+    ] + ["#include <decl/Kokkos_Declare_%s.hpp>" % b.upper() for b in _BACKENDS],
+    "core/src/KokkosCore_Config_FwdBackend.hpp": [
+        "#pragma once",
+    ] + ["#include <fwd/Kokkos_Fwd_%s.hpp>" % b.upper() for b in _BACKENDS],
+    "core/src/KokkosCore_Config_SetupBackend.hpp": [
+        "#pragma once",
+        "#include <setup/Kokkos_Setup_Cuda.hpp>",
+    ],
+    "core/src/KokkosCore_config.h": [
+        "#if !defined(KOKKOS_MACROS_HPP) || defined(KOKKOS_CORE_CONFIG_H)",
+        '#error "Do not include KokkosCore_config.h directly; include Kokkos_Macros.hpp instead."',
+        "#else",
+        "#define KOKKOS_CORE_CONFIG_H",
+        "#endif",
+        "#define KOKKOS_VERSION 50202",
+        "#define KOKKOS_VERSION_MAJOR (KOKKOS_VERSION / 10000)",
+        "#define KOKKOS_VERSION_MINOR (KOKKOS_VERSION / 100 % 100)",
+        "#define KOKKOS_VERSION_PATCH (KOKKOS_VERSION % 100)",
+        "#define KOKKOS_ENABLE_CXX20",
+        "#define KOKKOS_ENABLE_CUDA_CONSTEXPR",
+        "#define KOKKOS_ENABLE_DEPRECATED_CODE_4",  # Required by gpl View::HostMirror
+        "#define KOKKOS_ENABLE_DEPRECATED_CODE_5",
+        "#define KOKKOS_ENABLE_DEPRECATION_WARNINGS",
+        "#define KOKKOS_ENABLE_COMPLEX_ALIGN",
+        "#define KOKKOS_ENABLE_IMPL_MDSPAN",
+        "#define KOKKOS_ENABLE_IMPL_REF_COUNT_BRANCH_UNLIKELY",
+        "#define KOKKOS_ENABLE_LIBDL",
+        '#define KOKKOS_IMPL_DESUL_VERSION "bundled"',
+        '#define KOKKOS_IMPL_MDSPAN_VERSION "bundled"',
+    ] + [
+        "#define KOKKOS_ENABLE_" + b.upper()
+        for b in _BACKENDS
+    ] + select(
+        {
+            # Upstream kokkos_arch.cmake omits family macros for Turing and Ada.
+            "@openroad//:cuda_arch_" + arch: (
+                [] if karch in ("TURING75", "ADA89") else ["#define KOKKOS_ARCH_" + karch.rstrip("0123456789")]
+            ) + ["#define KOKKOS_ARCH_" + karch]
+            for arch, karch in CUDA_ARCHS.items()
+        },
+        no_match_error = CUDA_ARCH_FLAG_ERROR,
+    ),
+    "tpls/desul/include/desul/atomics/Config.hpp": [
+        "#pragma once",
+        "#define DESUL_ATOMICS_ENABLE_CUDA",
+    ],
+}
+
+[
+    write_file(
+        name = out.replace("/", "_").replace(".", "_"),
+        out = out,
+        content = content + [""],
+    )
+    for out, content in _CONFIG_HDRS.items()
+]
+
+_INCLUDES = [
+    "algorithms/src",
+    "containers/src",
+    "core/src",
+    "simd/src",
+    "tpls/desul/include",
+    "tpls/mdspan/include",
+]
+
+cc_library(
+    name = "kokkos",
+    srcs = glob(
+        [
+            "algorithms/src/**/*.cpp",
+            "containers/src/**/*.cpp",
+            "core/src/impl/*.cpp",
+            "simd/src/**/*.cpp",
+        ] + ["core/src/%s/*.cpp" % b for b in _BACKENDS],
+    ) + ["tpls/desul/src/Lock_Array_CUDA.cpp"],
+    hdrs = glob(
+        [d + "/**/*.h*" for d in _INCLUDES] + ["tpls/desul/include/**/*.inc*"],
+    ) + list(_CONFIG_HDRS.keys()),
+    additional_compiler_inputs = ["@cuda_local//:compiler_inputs"],
+    copts = CUDA_TOOLKIT_COPTS + CUDA_ARCH_COPTS,
+    includes = _INCLUDES,
+    linkopts = [
+        "-ldl",
+        "-pthread",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        "@cuda_local//:cudart",
+        "@openmp",
+    ],
+)

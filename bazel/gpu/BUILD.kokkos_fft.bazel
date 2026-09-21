@@ -1,0 +1,50 @@
+# SPDX-License-Identifier: BSD-3-Clause
+# Copyright (c) 2026, The OpenROAD Authors
+
+load("@bazel_skylib//rules:write_file.bzl", "write_file")
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
+
+write_file(
+    name = "kokkos_fft_config_hpp",
+    out = "common/src/KokkosFFT_config.hpp",
+    content = [
+        "#pragma once",
+        "#include <fftw3.h>",
+        "#define KOKKOSFFT_VERSION 2.0.0",
+        "#define KOKKOSFFT_VERSION_MAJOR 2",
+        "#define KOKKOSFFT_VERSION_MINOR 0",
+        "#define KOKKOSFFT_VERSION_PATCH 0",
+        "#define KOKKOSFFT_ENABLE_TPL_FFTW",
+        "#define KOKKOSFFT_ENABLE_TPL_CUFFT",
+        # Single-threaded @fftw stubs for KokkosFFT's OpenMP host path.
+        'extern "C" {',
+        "#pragma GCC visibility push(hidden)",
+        "inline int fftwf_init_threads() { return 1; }",
+        "inline int fftw_init_threads() { return 1; }",
+        "inline void fftwf_plan_with_nthreads(int) {}",
+        "inline void fftw_plan_with_nthreads(int) {}",
+        "inline void fftwf_cleanup_threads() { fftwf_cleanup(); }",
+        "inline void fftw_cleanup_threads() { fftw_cleanup(); }",
+        "#pragma GCC visibility pop",
+        "}",
+        "",
+    ],
+)
+
+cc_library(
+    name = "kokkos_fft",
+    hdrs = glob([
+        "common/src/**/*.hpp",
+        "fft/src/**/*.hpp",
+    ]) + ["common/src/KokkosFFT_config.hpp"],
+    includes = [
+        "common/src",
+        "fft/src",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        "@cuda_local//:cufft",
+        "@fftw",
+        "@kokkos",
+    ],
+)
